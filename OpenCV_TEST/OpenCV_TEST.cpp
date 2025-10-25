@@ -1,9 +1,10 @@
 ﻿#include <opencv2/opencv.hpp>
-#include "sqlite3.h"
+#include "sqlite3.h"  // ← 따옴표로 변경
 #include <string>
 #include <vector>
 #include <ctime>
 #include <iostream>
+#include <cstdio>
 using namespace cv;
 using std::string;
 using std::vector;
@@ -109,7 +110,7 @@ vector<Row> db_list(int offset, int limit, int& totalCount) {
 }
 
 ///////////////////////////// UI helpers /////////////////////////////
-enum Screen { SCOREBOARD, EDIT };
+enum Screen { HOME, GAME, SCOREBOARD, EDIT };
 struct Button { Rect rect; string label; };
 struct EditField { Rect rect; string label; string value; bool focused = false; bool numeric = false; };
 
@@ -119,12 +120,15 @@ int selectedId = -1;
 
 std::vector<Button> rowUpdateBtns, rowDeleteBtns;
 Button btnPrev, btnNext, btnRegister;
+Button btnToHome;            // SCOREBOARD → HOME(UI)
+Button btnGameStart, btnRanking; // HOME buttons
+Button btnGameToHome, btnGameToRanking; // GAME top-right nav
 
 EditField fldUser, fldScore;
 Button btnSubmit, btnCancel, btnReset;
 bool editModeUpdate = false; // false: insert, true: update
 
-void drawButton(Mat& img, const Button& b, bool primary = false) {
+void drawButton(Mat& img, const Button& b, bool /*primary*/ = false) {
     rectangle(img, b.rect, Scalar(60, 120, 220), FILLED);
     rectangle(img, b.rect, Scalar(240, 240, 240), 2);
     int baseline;
@@ -146,7 +150,39 @@ void drawField(Mat& img, EditField& f) {
 bool inside(const Rect& r, Point p) { return r.contains(p); }
 
 ///////////////////////////// Screens ////////////////////////////////
-Screen current = SCOREBOARD;
+Screen current = HOME;
+
+void showHome() {
+    Mat ui(H, W, CV_8UC3, Scalar(16, 20, 32));
+    putText(ui, "W E L C O M E", Point(40, 70), FONT_HERSHEY_SIMPLEX, 1.0, Scalar(0, 200, 255), 3, LINE_AA);
+    putText(ui, "Choose an option", Point(42, 110), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(220, 220, 220), 2, LINE_AA);
+
+    int bw = 220, bh = 70;
+    int cx = W / 2;
+    int cy = H / 2 - 20;
+    btnGameStart = { Rect(cx - bw - 20, cy - bh / 2, bw, bh), "GAME START" };
+    btnRanking = { Rect(cx + 20,        cy - bh / 2, bw, bh), "RANKING" };
+
+    drawButton(ui, btnGameStart, true);
+    drawButton(ui, btnRanking, true);
+
+    imshow("Scoreboard", ui);
+}
+
+void showGame() {
+    Mat ui(H, W, CV_8UC3, Scalar(24, 28, 48));
+    putText(ui, "G A M E   S C R E E N", Point(40, 60), FONT_HERSHEY_SIMPLEX, 0.9, Scalar(0, 220, 255), 3, LINE_AA);
+    putText(ui, "This is a placeholder for your game UI.", Point(42, 100),
+        FONT_HERSHEY_SIMPLEX, 0.7, Scalar(220, 220, 220), 2, LINE_AA);
+
+    // 상단 네비게이션 버튼
+    btnGameToHome = { Rect(W - 280, 20, 110, 40), "Home" };
+    btnGameToRanking = { Rect(W - 160, 20, 110, 40), "Ranking" };
+    drawButton(ui, btnGameToHome);
+    drawButton(ui, btnGameToRanking);
+
+    imshow("Scoreboard", ui);
+}
 
 void showScoreboard() {
     Mat ui(H, W, CV_8UC3, Scalar(18, 24, 40));
@@ -169,10 +205,10 @@ void showScoreboard() {
     for (int i = 0;i < (int)rows.size();++i) {
         int y = y0 + 20 + i * rowH;
         const Row& r = rows[i];
-        char idx[16]; sprintf_s(idx, "%d", offset + i + 1);
+        char idx[16];  sprintf_s(idx, sizeof(idx), "%d", offset + i + 1);
         putText(ui, idx, Point(x0, y), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(230, 230, 230), 2);
         putText(ui, r.username, Point(x0 + 40, y), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 230, 180), 2);
-        char sv[64]; sprintf_s(sv, "%.3f", r.score);
+        char sv[64];   sprintf_s(sv, sizeof(sv), "%.f", r.score);
         putText(ui, sv, Point(x0 + 300, y), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(180, 255, 200), 2);
         putText(ui, r.moment, Point(x0 + 430, y), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(200, 220, 255), 2);
 
@@ -187,14 +223,19 @@ void showScoreboard() {
 
     // footer
     char buf[64];
-    sprintf_s(buf, "%d items, page %d/%d", total, (total ? page + 1 : 0), (total ? ((total - 1) / pageSize + 1) : 0));
+    int totalPages = (total ? ((total - 1) / pageSize + 1) : 0);
+    int displayPage = (total ? page + 1 : 0);
+    sprintf_s(buf, sizeof(buf), "%d items, page %d/%d", total, displayPage, totalPages);
     putText(ui, buf, Point(30, H - 60), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(120, 220, 220), 2);
 
     btnPrev = { Rect(30, H - 50, 100, 36), "Prev" };
     btnNext = { Rect(140, H - 50, 100, 36), "Next" };
     btnRegister = { Rect(W - 150, H - 60, 120, 46), "Register" };
+    btnToHome = { Rect(W - 290, H - 60, 120, 46), "UI" }; // ← 홈(UI) 화면으로 이동
+
     drawButton(ui, btnPrev);
     drawButton(ui, btnNext);
+    drawButton(ui, btnToHome);
     drawButton(ui, btnRegister, true);
 
     imshow("Scoreboard", ui);
@@ -224,25 +265,37 @@ void showEdit() {
 ///////////////////////////// Input handling /////////////////////////
 void mouseCallback(int event, int x, int y, int /*flags*/, void* /*userdata*/) {
     Point p(x, y);
-    if (current == SCOREBOARD) {
-        if (event == EVENT_LBUTTONDOWN) {
-            // pagination
-            if (inside(btnPrev.rect, p)) { page = std::max(0, page - 1); showScoreboard(); return; }
-            if (inside(btnNext.rect, p)) { page = page + 1; showScoreboard(); return; }
-            if (inside(btnRegister.rect, p)) { current = EDIT; editModeUpdate = false; selectedId = -1; resetEditFields(); showEdit(); return; }
+    if (event != EVENT_LBUTTONDOWN) return;
 
-            // row actions
+    if (current == HOME) {
+        if (inside(btnGameStart.rect, p)) { current = GAME; showGame(); return; }
+        if (inside(btnRanking.rect, p)) { current = SCOREBOARD; page = 0; showScoreboard(); return; }
+    }
+    else if (current == GAME) {
+        if (inside(btnGameToHome.rect, p)) { current = HOME; showHome(); return; }
+        if (inside(btnGameToRanking.rect, p)) { current = SCOREBOARD; page = 0; showScoreboard(); return; }
+        // 게임 화면 내 추가 인터랙션
+    }
+    else if (current == SCOREBOARD) {
+        // pagination
+        if (inside(btnPrev.rect, p)) { page = std::max(0, page - 1); showScoreboard(); return; }
+        if (inside(btnNext.rect, p)) { page = page + 1; showScoreboard(); return; }
+        if (inside(btnRegister.rect, p)) { current = EDIT; editModeUpdate = false; selectedId = -1; resetEditFields(); showEdit(); return; }
+        if (inside(btnToHome.rect, p)) { current = HOME; showHome(); return; } // ← UI로 이동
+
+        // row actions
+        {
             int totalDummy; auto rows = db_list(page * pageSize, pageSize, totalDummy);
             for (int i = 0;i < (int)rows.size();++i) {
-                if (inside(rowUpdateBtns[i].rect, p)) {
+                if (i < (int)rowUpdateBtns.size() && inside(rowUpdateBtns[i].rect, p)) {
                     // load row -> edit
                     selectedId = rows[i].id;
                     fldUser.value = rows[i].username;
-                    char sv[64]; sprintf_s(sv, "%.3f", rows[i].score);
+                    char sv[64]; sprintf_s(sv, sizeof(sv), "%.3f", rows[i].score);
                     fldScore.value = sv;
                     current = EDIT; editModeUpdate = true; showEdit(); return;
                 }
-                if (inside(rowDeleteBtns[i].rect, p)) {
+                if (i < (int)rowDeleteBtns.size() && inside(rowDeleteBtns[i].rect, p)) {
                     db_delete(rows[i].id);
                     showScoreboard(); return;
                 }
@@ -250,21 +303,19 @@ void mouseCallback(int event, int x, int y, int /*flags*/, void* /*userdata*/) {
         }
     }
     else if (current == EDIT) {
-        if (event == EVENT_LBUTTONDOWN) {
-            fldUser.focused = inside(fldUser.rect, p);
-            fldScore.focused = inside(fldScore.rect, p);
-            if (inside(btnCancel.rect, p)) { current = SCOREBOARD; showScoreboard(); return; }
-            if (inside(btnReset.rect, p)) { fldUser.value.clear(); fldScore.value.clear(); showEdit(); return; }
-            if (inside(btnSubmit.rect, p)) {
-                // validation
-                if (fldUser.value.empty() || fldScore.value.empty()) { std::cerr << "Empty fields.\n"; return; }
-                double s = atof(fldScore.value.c_str());
-                if (editModeUpdate && selectedId > 0) db_update(selectedId, fldUser.value, s);
-                else db_insert(fldUser.value, s);
-                current = SCOREBOARD; showScoreboard(); return;
-            }
-            showEdit();
+        fldUser.focused = inside(fldUser.rect, p);
+        fldScore.focused = inside(fldScore.rect, p);
+        if (inside(btnCancel.rect, p)) { current = SCOREBOARD; showScoreboard(); return; }
+        if (inside(btnReset.rect, p)) { fldUser.value.clear(); fldScore.value.clear(); showEdit(); return; }
+        if (inside(btnSubmit.rect, p)) {
+            // validation
+            if (fldUser.value.empty() || fldScore.value.empty()) { std::cerr << "Empty fields.\n"; return; }
+            double s = atof(fldScore.value.c_str());
+            if (editModeUpdate && selectedId > 0) db_update(selectedId, fldUser.value, s);
+            else db_insert(fldUser.value, s);
+            current = SCOREBOARD; showScoreboard(); return;
         }
+        showEdit();
     }
 }
 
@@ -280,8 +331,8 @@ void handleKey(int key) {
         if (fldUser.focused) { fldUser.focused = false; fldScore.focused = true; }
         else if (fldScore.focused) { fldScore.focused = false; fldUser.focused = true; }
     }
-    else if (key == 13) { // enter = submit
-        btnSubmit.label = btnSubmit.label; // no-op
+    else if (key == 13) { // enter
+        // 필요 시 제출 동작 연결 가능
     }
     else if (key >= 32 && key <= 126) {
         char c = (char)key;
@@ -301,8 +352,9 @@ int main() {
     namedWindow("Scoreboard", WINDOW_AUTOSIZE);
     setMouseCallback("Scoreboard", mouseCallback);
 
-    // 첫 화면
-    showScoreboard();
+    // 시작은 홈(UI) 화면
+    current = HOME;
+    showHome();
 
     for (;;) {
         int key = waitKey(30);
@@ -314,14 +366,3 @@ int main() {
     destroyAllWindows();
     return 0;
 }
-
-// 프로그램 실행: <Ctrl+F5> 또는 [디버그] > [디버깅하지 않고 시작] 메뉴
-// 프로그램 디버그: <F5> 키 또는 [디버그] > [디버깅 시작] 메뉴
-
-// 시작을 위한 팁: 
-//   1. [솔루션 탐색기] 창을 사용하여 파일을 추가/관리합니다.
-//   2. [팀 탐색기] 창을 사용하여 소스 제어에 연결합니다.
-//   3. [출력] 창을 사용하여 빌드 출력 및 기타 메시지를 확인합니다.
-//   4. [오류 목록] 창을 사용하여 오류를 봅니다.
-//   5. [프로젝트] > [새 항목 추가]로 이동하여 새 코드 파일을 만들거나, [프로젝트] > [기존 항목 추가]로 이동하여 기존 코드 파일을 프로젝트에 추가합니다.
-//   6. 나중에 이 프로젝트를 다시 열려면 [파일] > [열기] > [프로젝트]로 이동하고 .sln 파일을 선택합니다.
